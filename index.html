@@ -1074,7 +1074,7 @@
                 suggestionTextEl.textContent = 'No small change to rounds/courts (± small range) will make exact equality possible. Try larger adjustments.';
                 suggestionTextEl.style.color = '#a33';
             } else {
-                suggestionTextEl.textContent = `Change rounds to ${best.nr} and courts to ${best.nc} (Δrounds=${best.dr >= 0 ? '+'+best.dr : best.dr}, Δcourts=${best.dc >= 0 ? '+'+best.dc : best.dc}) — minimal small change found.`;
+                suggestionTextEl.textContent = `Rounds: ${best.nr} Courts: ${best.nc} (Δrounds=${best.dr >= 0 ? '+'+best.dr : best.dr}, Δcourts=${best.dc >= 0 ? '+'+best.dc : best.dc})`;
                 suggestionTextEl.style.color = '#055';
                 // store on container for apply
                 const container = document.getElementById('suggestions');
