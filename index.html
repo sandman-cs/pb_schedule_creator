@@ -7,7 +7,8 @@
     <style>
         /* Keep all your original CSS */
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            font-weight: normal;
             max-width: 1200px;
             margin: 0 auto;
             padding: 20px;
@@ -123,6 +124,31 @@
             margin-bottom: 20px;
             border-left: 4px solid #2196F3;
         }
+        /* Require exact equality section styles */
+        #requireExactContainer {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-top: 12px;
+            padding: 10px;
+            background: #fff8e1;
+            border-left: 4px solid #ffcc00;
+            border-radius: 8px;
+        }
+        #requireExactContainer .rx-title {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-weight: 700;
+            font-size: 1.05rem;
+            color: #1f2937;
+            letter-spacing: 0.2px;
+        }
+        #requireExactContainer .rx-desc {
+            color: #374151;
+            font-size: 0.95rem;
+            opacity: 0.95;
+            max-width: 60%;
+            line-height: 1.25;
+        }
         /* Generating overlay */
         .modal-overlay {
             position: fixed;
@@ -199,6 +225,21 @@
                 <button id="generateBtn" style="padding:8px 12px; border-radius:6px; border:none; background:#4ECDC4; color:#fff; cursor:pointer;">Generate</button>
                 <button id="exportBtn" style="padding:8px 12px; border-radius:6px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Export</button>
             </div>
+            <div id="requireExactContainer">
+                <input id="requireExact" type="checkbox" style="width:20px; height:20px;">
+                <div class="rx-title">Require exact equality</div>
+                <div class="rx-desc">When enabled, generation will be aborted if exact equality is not possible.</div>
+            </div>
+            <div id="suggestions" style="margin-top:10px; padding:10px; background:#eef7ff; border-left:4px solid #2196F3; border-radius:8px; display:flex; gap:12px; align-items:center;">
+                <div style="flex:1;">
+                    <div style="font-weight:700;">Suggestions to achieve exact equality</div>
+                    <div id="suggestionText" style="color:#333; font-size:0.95em; margin-top:6px;">Click "Compute" to see minimal rounds/courts changes.</div>
+                </div>
+                <div style="display:flex; gap:8px;">
+                    <button id="computeSuggestionsBtn" style="padding:6px 10px; border-radius:6px; border:none; background:#4ECDC4; color:#fff; cursor:pointer;">Compute</button>
+                    <button id="applySuggestionBtn" style="padding:6px 10px; border-radius:6px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Apply</button>
+                </div>
+            </div>
             <div id="setupSummary" style="margin-top:10px; color:#555; font-size:0.95em;"></div>
         </div>
 
@@ -215,12 +256,12 @@
         // Configurable globals
         let players = [];
         let tournament = [];
-        let numCourts = 5;
-        let numRounds = 11;
+        let numCourts = 2;
+        let numRounds = 10;
 
         // Default players to prefill the textarea
         const defaultPlayers = [
-            "Jen","Carol","Nancy","Linda","Qi","Gina","Leni","Wei","Jeanette",
+            "Leni","Wei","Jeanette",
             "Connie","Lisa","Megan","Teresa","Heidi","Jane","Patty","Julie","Marla",
             "Mary Beth","Mary L","Melissa","Elissa"
         ];
@@ -247,8 +288,15 @@
             const playersCount = playersList.length;
             const playersPerRound = numCourts * 4;
             const sitOut = playersCount - playersPerRound;
-            summary.innerHTML = `${playersCount} players, ${numCourts} courts (${playersPerRound} players/round), ${numRounds} rounds.` +
+            const requireExactEl = document.getElementById('requireExact');
+            const requireExact = requireExactEl ? requireExactEl.checked : false;
+            const baseText = `${playersCount} players, ${numCourts} courts (${playersPerRound} players/round), ${numRounds} rounds.` +
                 (sitOut > 0 ? ` Sit out per round: ${sitOut}` : sitOut === 0 ? ` No one sits out` : ` Not enough players for ${numCourts} courts`);
+            // show a subtle hint if exact equality is impossible and user hasn't required it
+            const totalPlaySlots = numRounds * playersPerRound;
+            const equalityPossible = playersCount > 0 && (totalPlaySlots % playersCount === 0);
+            const hint = (!requireExact && !equalityPossible) ? ` — Note: exact equality impossible (will differ by ≤1)` : '';
+            summary.innerHTML = baseText + (requireExact ? ` — Require exact equality: Yes` : ` — Require exact equality: No`) + hint;
         }
 
         function generateTournament() {
@@ -276,31 +324,180 @@
                 sittingOutCount.set(p, 0);
             });
 
-            for (let round = 1; round <= numRounds; round++) {
-                const roundData = generateRound(round, teamPartnerships, courtCount, sittingOutCount, sitOutCount);
-                if (!roundData) {
-                    console.warn('Failed to create round', round);
-                    continue;
+            // Determine whether exact equal plays per player is possible
+            const totalPlaySlots = numRounds * playersPerRound;
+            const playerCount = players.length;
+
+            if (playerCount === 0) {
+                alert('No players provided');
+                return;
+            }
+
+            const requireExactEl = document.getElementById('requireExact');
+            const requireExact = requireExactEl ? requireExactEl.checked : false;
+
+            if (requireExact && (totalPlaySlots % playerCount !== 0)) {
+                alert('Require exact equality is enabled but exact equality is not possible with the current configuration. Please change rounds/courts or uncheck the toggle.');
+                return;
+            }
+
+            if (totalPlaySlots % playerCount === 0) {
+                // exact equality possible
+                const targetPlaysPerPlayer = totalPlaySlots / playerCount;
+                tournament = scheduleWithExactPlays(targetPlaysPerPlayer, teamPartnerships, courtCount, sittingOutCount, playersPerRound);
+            } else {
+                // cannot make every player play exactly the same number of games
+                // distribute quotas so difference is at most 1
+                console.info('Exact equal number of games per player is not possible with the current configuration. The schedule will distribute games so counts differ by at most 1.');
+                const base = Math.floor(totalPlaySlots / playerCount);
+                const extra = totalPlaySlots % playerCount; // number of players who should play (base+1)
+                tournament = scheduleWithPlayQuotas(base, extra, teamPartnerships, courtCount, sittingOutCount, playersPerRound);
+            }
+
+            // If scheduler functions already produced rounds, skip the older per-round generator.
+            if (!tournament || tournament.length === 0) {
+                for (let round = 1; round <= numRounds; round++) {
+                    const roundData = generateRound(round, teamPartnerships, courtCount, sittingOutCount, sitOutCount);
+                    if (!roundData) {
+                        console.warn('Failed to create round', round);
+                        continue;
+                    }
+                    tournament.push(roundData);
+
+                    roundData.courts.forEach(court => {
+                        // track partnerships
+                        teamPartnerships.get(court.team1[0]).add(court.team1[1]);
+                        teamPartnerships.get(court.team1[1]).add(court.team1[0]);
+                        teamPartnerships.get(court.team2[0]).add(court.team2[1]);
+                        teamPartnerships.get(court.team2[1]).add(court.team2[0]);
+
+                        court.team1.forEach(p => courtCount.set(p, courtCount.get(p) + 1));
+                        court.team2.forEach(p => courtCount.set(p, courtCount.get(p) + 1));
+                    });
+
+                    roundData.sittingOut.forEach(p => sittingOutCount.set(p, sittingOutCount.get(p) + 1));
                 }
-                tournament.push(roundData);
-
-                roundData.courts.forEach(court => {
-                    // track partnerships
-                    teamPartnerships.get(court.team1[0]).add(court.team1[1]);
-                    teamPartnerships.get(court.team1[1]).add(court.team1[0]);
-                    teamPartnerships.get(court.team2[0]).add(court.team2[1]);
-                    teamPartnerships.get(court.team2[1]).add(court.team2[0]);
-
-                    court.team1.forEach(p => courtCount.set(p, courtCount.get(p) + 1));
-                    court.team2.forEach(p => courtCount.set(p, courtCount.get(p) + 1));
-                });
-
-                roundData.sittingOut.forEach(p => sittingOutCount.set(p, sittingOutCount.get(p) + 1));
             }
 
             displayTournament();
             displayStats(teamPartnerships, courtCount, sittingOutCount);
             updateSetupSummary();
+        }
+
+        // Schedule when exact equal plays per player is possible
+        function scheduleWithExactPlays(targetPlaysPerPlayer, teamPartnerships, courtCount, sittingOutCount, playersPerRound) {
+            // Build a slot array where each player appears exactly targetPlaysPerPlayer times.
+            const slots = [];
+            players.forEach(p => {
+                for (let i = 0; i < targetPlaysPerPlayer; i++) slots.push(p);
+            });
+
+            // Shuffle slots to randomize distribution
+            const shuffledSlots = shuffleArray(slots);
+
+            const rounds = [];
+            const totalRounds = numRounds;
+            const perRound = playersPerRound;
+
+            // Sanity check
+            if (shuffledSlots.length !== totalRounds * perRound) {
+                console.warn('Slot count mismatch in scheduleWithExactPlays');
+            }
+
+            for (let r = 0; r < totalRounds; r++) {
+                const start = r * perRound;
+                const group = shuffledSlots.slice(start, start + perRound);
+                // If group smaller than needed (shouldn't happen), fill with players with remaining slots
+                if (group.length < perRound) {
+                    console.warn('Not enough players for round', r + 1);
+                    break;
+                }
+
+                // Pair by shuffling the group's players and pairing adjacent ones
+                const roundPool = shuffleArray(group);
+                const teams = [];
+                for (let i = 0; i < roundPool.length; i += 2) teams.push([roundPool[i], roundPool[i + 1]]);
+
+                // Build courts: pair teams in order
+                const courts = [];
+                for (let i = 0; i < numCourts; i++) {
+                    const t1 = teams[i * 2];
+                    const t2 = teams[i * 2 + 1];
+                    courts.push({ number: i + 1, team1: t1, team2: t2 });
+                }
+
+                const sittingOut = players.filter(p => !group.includes(p));
+
+                const roundData = { round: r + 1, courts, sittingOut };
+                rounds.push(roundData);
+
+                // update trackers
+                roundData.courts.forEach(court => {
+                    court.team1.forEach(p => courtCount.set(p, (courtCount.get(p) || 0) + 1));
+                    court.team2.forEach(p => courtCount.set(p, (courtCount.get(p) || 0) + 1));
+                    teamPartnerships.get(court.team1[0]).add(court.team1[1]);
+                    teamPartnerships.get(court.team1[1]).add(court.team1[0]);
+                    teamPartnerships.get(court.team2[0]).add(court.team2[1]);
+                    teamPartnerships.get(court.team2[1]).add(court.team2[0]);
+                });
+                roundData.sittingOut.forEach(p => sittingOutCount.set(p, (sittingOutCount.get(p) || 0) + 1));
+            }
+
+            return rounds;
+        }
+
+        // Schedule when exact equality impossible: give 'extra' players one more play (base+1), others base
+        function scheduleWithPlayQuotas(base, extra, teamPartnerships, courtCount, sittingOutCount, playersPerRound) {
+            // Build slot array where 'extra' players get base+1 slots and others get base
+            const slots = [];
+            // Shuffle players to choose which get the extra slot
+            const pickOrder = shuffleArray([...players]);
+            for (let i = 0; i < players.length; i++) {
+                const p = pickOrder[i];
+                const quota = base + (i < extra ? 1 : 0);
+                for (let q = 0; q < quota; q++) slots.push(p);
+            }
+
+            const shuffledSlots = shuffleArray(slots);
+            const rounds = [];
+            const totalRounds = numRounds;
+            const perRound = playersPerRound;
+
+            for (let r = 0; r < totalRounds; r++) {
+                const start = r * perRound;
+                const group = shuffledSlots.slice(start, start + perRound);
+                if (group.length < perRound) {
+                    console.warn('Not enough players for round', r + 1);
+                    break;
+                }
+
+                const roundPool = shuffleArray(group);
+                const teams = [];
+                for (let i = 0; i < roundPool.length; i += 2) teams.push([roundPool[i], roundPool[i + 1]]);
+
+                const courts = [];
+                for (let i = 0; i < numCourts; i++) {
+                    const t1 = teams[i * 2];
+                    const t2 = teams[i * 2 + 1];
+                    courts.push({ number: i + 1, team1: t1, team2: t2 });
+                }
+
+                const sittingOut = players.filter(p => !group.includes(p));
+                const roundData = { round: r + 1, courts, sittingOut };
+                rounds.push(roundData);
+
+                roundData.courts.forEach(court => {
+                    court.team1.forEach(p => courtCount.set(p, (courtCount.get(p) || 0) + 1));
+                    court.team2.forEach(p => courtCount.set(p, (courtCount.get(p) || 0) + 1));
+                    teamPartnerships.get(court.team1[0]).add(court.team1[1]);
+                    teamPartnerships.get(court.team1[1]).add(court.team1[0]);
+                    teamPartnerships.get(court.team2[0]).add(court.team2[1]);
+                    teamPartnerships.get(court.team2[1]).add(court.team2[0]);
+                });
+                roundData.sittingOut.forEach(p => sittingOutCount.set(p, (sittingOutCount.get(p) || 0) + 1));
+            }
+
+            return rounds;
         }
 
         function generateRound(roundNum, teamPartnerships, courtCount, sittingOutCount, sitOutCount) {
@@ -639,7 +836,66 @@
         document.getElementById('exportBtn').addEventListener('click', () => exportTournament());
         document.getElementById('numCourts').addEventListener('change', (e) => { numCourts = parseInt(e.target.value, 10) || 1; updateSetupSummary(); });
         document.getElementById('numRounds').addEventListener('change', (e) => { numRounds = parseInt(e.target.value, 10) || 1; updateSetupSummary(); });
+    const reqEl = document.getElementById('requireExact'); if (reqEl) reqEl.addEventListener('change', updateSetupSummary);
         document.getElementById('playerNames').addEventListener('input', updateSetupSummary);
+
+        // Suggestions: compute and apply
+        function computeSuggestions() {
+            const playersList = getPlayersFromInput();
+            const pCount = playersList.length;
+            const currentRounds = parseInt(document.getElementById('numRounds').value, 10) || 1;
+            const currentCourts = parseInt(document.getElementById('numCourts').value, 10) || 1;
+            const playersPerRound = currentCourts * 4;
+            const totalSlots = currentRounds * playersPerRound;
+
+            const maxRoundDelta = 6;
+            const maxCourtDelta = 3;
+            let best = null;
+
+            for (let dr = -maxRoundDelta; dr <= maxRoundDelta; dr++) {
+                const nr = currentRounds + dr;
+                if (nr < 1) continue;
+                for (let dc = -maxCourtDelta; dc <= maxCourtDelta; dc++) {
+                    const nc = currentCourts + dc;
+                    if (nc < 1) continue;
+                    const slots = nr * (nc * 4);
+                    if (pCount > 0 && slots % pCount === 0) {
+                        const cost = Math.abs(dr) + Math.abs(dc);
+                        if (!best || cost < best.cost) best = { dr, dc, nr, nc, cost };
+                    }
+                }
+            }
+
+            const suggestionTextEl = document.getElementById('suggestionText');
+            if (!best) {
+                suggestionTextEl.textContent = 'No small change to rounds/courts (± small range) will make exact equality possible. Try larger adjustments.';
+                suggestionTextEl.style.color = '#a33';
+            } else {
+                suggestionTextEl.textContent = `Change rounds to ${best.nr} and courts to ${best.nc} (Δrounds=${best.dr >= 0 ? '+'+best.dr : best.dr}, Δcourts=${best.dc >= 0 ? '+'+best.dc : best.dc}) — minimal small change found.`;
+                suggestionTextEl.style.color = '#055';
+                // store on container for apply
+                const container = document.getElementById('suggestions');
+                container.dataset.suggestNr = best.nr;
+                container.dataset.suggestNc = best.nc;
+            }
+        }
+
+        function applySuggestion() {
+            const container = document.getElementById('suggestions');
+            const nr = parseInt(container.dataset.suggestNr, 10);
+            const nc = parseInt(container.dataset.suggestNc, 10);
+            if (!nr || !nc) {
+                alert('No suggestion available. Click Compute first.');
+                return;
+            }
+            document.getElementById('numRounds').value = nr;
+            document.getElementById('numCourts').value = nc;
+            numRounds = nr; numCourts = nc;
+            updateSetupSummary();
+        }
+
+        const computeBtn = document.getElementById('computeSuggestionsBtn'); if (computeBtn) computeBtn.addEventListener('click', computeSuggestions);
+        const applyBtn = document.getElementById('applySuggestionBtn'); if (applyBtn) applyBtn.addEventListener('click', applySuggestion);
 
         // Prefill and initial render
         document.getElementById('playerNames').value = defaultPlayers.join('\n');
