@@ -308,17 +308,23 @@
             let bestScore = -Infinity;
             const maxAttempts = 4000;
 
-            // Prepare list of players sorted by how often they've sat out (asc)
+            // Prefer players who have already played more games to sit out
             for (let attempt = 0; attempt < maxAttempts; attempt++) {
-                // choose sitting out players (prioritize those who've sat out least)
-                const candidates = [...players].sort((a, b) => sittingOutCount.get(a) - sittingOutCount.get(b));
-                // add some randomness among top candidates
-                const pickPool = candidates.slice(0, Math.min(candidates.length, sitOutCount + 6));
+                // sort by courtCount desc so highest-played players are more likely to be picked to sit
+                const candidates = [...players].sort((a, b) => {
+                    const diff = (courtCount.get(b) || 0) - (courtCount.get(a) || 0);
+                    if (diff !== 0) return diff;
+                    // tie-breaker: prefer players who've sat out fewer times to sit (so we avoid repeated sits)
+                    return (sittingOutCount.get(a) || 0) - (sittingOutCount.get(b) || 0);
+                });
+
+                // add a bit of randomness among the top candidates to avoid deterministic patterns
+                const pickPool = candidates.slice(0, Math.min(candidates.length, Math.max(1, sitOutCount + 6)));
                 const shuffledPool = shuffleArray(pickPool);
-                const sittingOut = shuffledPool.slice(0, sitOutCount);
+                const sittingOut = sitOutCount > 0 ? shuffledPool.slice(0, sitOutCount) : [];
 
                 const playingPlayers = players.filter(p => !sittingOut.includes(p));
-                const roundData = tryCreateRoundWithImprovedPartners(roundNum, playingPlayers, sittingOut, teamPartnerships);
+                const roundData = tryCreateRoundWithImprovedPartners(roundNum, playingPlayers, sittingOut, teamPartnerships, courtCount);
                 if (!roundData) continue;
 
                 const score = evaluateRound(roundData, teamPartnerships, courtCount);
@@ -336,7 +342,7 @@
             return bestRound;
         }
 
-        function tryCreateRoundWithImprovedPartners(roundNum, playingPlayers, sittingOut, teamPartnerships) {
+    function tryCreateRoundWithImprovedPartners(roundNum, playingPlayers, sittingOut, teamPartnerships, courtCount) {
             // Build interaction counts across previous rounds
             const playerInteractions = new Map();
             players.forEach(p => {
@@ -365,6 +371,11 @@
                     pairScore += interactionCount * 100;
                     const indexDiff = Math.abs(players.indexOf(a) - players.indexOf(b));
                     pairScore -= indexDiff * 5;
+                    // Prefer pairing players who've played fewer games so counts stay balanced
+                    const aPlayed = courtCount.get(a) || 0;
+                    const bPlayed = courtCount.get(b) || 0;
+                    // reduce score for low-played pairs (lower score is better), so pairs with lower total played are favored
+                    pairScore -= ( (aPlayed + bPlayed) * 40 );
                     possiblePairs.push({ players: [a, b], score: pairScore });
                 }
             }
@@ -437,8 +448,13 @@
 
             for (let attempt = 0; attempt < 3000; attempt++) {
                 const playersArray = shuffleArray([...players]);
-                const candidates = playersArray.sort((a, b) => sittingOutCount.get(a) - sittingOutCount.get(b));
-                const sittingOut = candidates.slice(0, sitOutCount);
+                // prefer high-played players to sit out
+                const candidates = playersArray.sort((a, b) => {
+                    const diff = (courtCount.get(b) || 0) - (courtCount.get(a) || 0);
+                    if (diff !== 0) return diff;
+                    return (sittingOutCount.get(a) || 0) - (sittingOutCount.get(b) || 0);
+                });
+                const sittingOut = sitOutCount > 0 ? candidates.slice(0, sitOutCount) : [];
                 const playing = playersArray.filter(p => !sittingOut.includes(p));
 
                 const possiblePairs = [];
@@ -449,6 +465,10 @@
                         if (teamPartnerships.get(a).has(b)) score += 500;
                         const indexDiff = Math.abs(players.indexOf(a) - players.indexOf(b));
                         score -= indexDiff * 3;
+                        // favor pairing players who've played less
+                        const aPlayed = courtCount.get(a) || 0;
+                        const bPlayed = courtCount.get(b) || 0;
+                        score -= (aPlayed + bPlayed) * 30;
                         possiblePairs.push({ players: [a, b], score });
                     }
                 }
@@ -493,12 +513,21 @@
                 const team2Diff = Math.abs(players.indexOf(court.team2[0]) - players.indexOf(court.team2[1]));
                 score += (team1Diff + team2Diff) * 2;
             });
-            const courtTimes = [];
-            roundData.courts.forEach(court => { court.team1.forEach(p => courtTimes.push(courtCount.get(p))); court.team2.forEach(p => courtTimes.push(courtCount.get(p))); });
-            if (courtTimes.length) {
-                const maxTime = Math.max(...courtTimes); const minTime = Math.min(...courtTimes);
-                score -= (maxTime - minTime) * 10;
-            }
+            // Evaluate projected court counts after this round and penalize increased variance
+            const projected = new Map();
+            players.forEach(p => projected.set(p, courtCount.get(p) || 0));
+            roundData.courts.forEach(court => { court.team1.forEach(p => projected.set(p, projected.get(p) + 1)); court.team2.forEach(p => projected.set(p, projected.get(p) + 1)); });
+            // compute simple spread (max - min) and standard deviation-like penalty
+            const counts = [...projected.values()];
+            const maxTime = Math.max(...counts);
+            const minTime = Math.min(...counts);
+            const mean = counts.reduce((a, b) => a + b, 0) / counts.length;
+            let variance = 0; counts.forEach(c => variance += (c - mean) * (c - mean));
+            variance = variance / counts.length;
+            const stdev = Math.sqrt(variance);
+            // Penalize spread heavily and stdev moderately
+            score -= (maxTime - minTime) * 25;
+            score -= stdev * 15;
             return score;
         }
 
