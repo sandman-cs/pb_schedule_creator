@@ -1037,10 +1037,10 @@
         });
 
         document.getElementById('exportBtn').addEventListener('click', () => exportTournament());
-        document.getElementById('numCourts').addEventListener('change', (e) => { numCourts = parseInt(e.target.value, 10) || 1; updateSetupSummary(); });
-        document.getElementById('numRounds').addEventListener('change', (e) => { numRounds = parseInt(e.target.value, 10) || 1; updateSetupSummary(); });
-    const reqEl = document.getElementById('requireExact'); if (reqEl) reqEl.addEventListener('change', updateSetupSummary);
-        document.getElementById('playerNames').addEventListener('input', updateSetupSummary);
+        document.getElementById('numCourts').addEventListener('change', (e) => { numCourts = parseInt(e.target.value, 10) || 1; updateSetupSummary(); computeSuggestions(); });
+        document.getElementById('numRounds').addEventListener('change', (e) => { numRounds = parseInt(e.target.value, 10) || 1; updateSetupSummary(); computeSuggestions(); });
+    const reqEl = document.getElementById('requireExact'); if (reqEl) reqEl.addEventListener('change', () => { updateSetupSummary(); computeSuggestions(); });
+        document.getElementById('playerNames').addEventListener('input', () => { updateSetupSummary(); computeSuggestions(); });
 
         // Suggestions: compute and apply
         function computeSuggestions() {
@@ -1095,6 +1095,8 @@
             document.getElementById('numCourts').value = nc;
             numRounds = nr; numCourts = nc;
             updateSetupSummary();
+            // Recompute suggestions after applying (player count or other inputs may have changed)
+            computeSuggestions();
         }
 
         const computeBtn = document.getElementById('computeSuggestionsBtn'); if (computeBtn) computeBtn.addEventListener('click', computeSuggestions);
