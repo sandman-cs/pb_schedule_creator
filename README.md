@@ -1,61 +1,86 @@
-PB Schedule Builder
-===================
 
-A simple client-side HTML page that generates round-robin-style pickleball schedules. The generator accepts a list of player names, number of courts, and number of rounds and attempts to minimize repeated partnerships and opponent repeats while balancing court time and sit-outs.
+PB Schedule Creator (index.html)
+================================
+
+This is a single-file, client-side pickleball schedule generator. Give it a list of players, a number of courts and rounds, and it will produce per-round pairings while trying to balance court time, rotate sit-outs, and minimize repeated partnerships and opponent repeats.
+
+What’s new (recent changes)
+
+---------------------------
+
+- Require exact equality toggle: a UI checkbox ("Require exact equality") lets you insist that every player plays exactly the same number of games. When enabled the generator will either produce an exact-equality schedule or inform you it's impossible with the current configuration.
+- Suggestions panel: a small helper computes minimal changes to rounds/courts (within a small search window) to make exact equality possible, and you can apply those changes with one click. The app can auto-apply this suggestion at load when the toggle is enabled.
+- Exact/quota schedulers: the generator now contains two slot-based schedulers:
+  - An exact scheduler that assigns every player the same number of play slots when total slots divide evenly by number of players.
+  - A quota scheduler that distributes slots so counts differ by at most 1 when exact equality isn't possible.
+- Per-round uniqueness: selection of players for each round guarantees a player won't appear twice in the same round.
+- Duplicate-partnership avoidance: when forming teams inside a round the generator uses a best-effort backtracking algorithm to avoid reusing partnerships from earlier rounds. If the backtracker cannot find a pairing quickly it falls back to randomized pairing.
+- Assertion & repair pass: after generation a repair pass fixes any remaining duplicated player occurrences inside a round (preferentially replacing with low-played players) and recomputes statistics.
 
 Files
 -----
 
-- `PB Schedule Builder.html` — The main HTML file. Open it in a browser to use the UI.
+- `index.html` — The single-page app. Open it in a browser to use the UI.
 
-Usage
------
+Quick start (open and run)
+-------------------------
 
-1. Open `PB Schedule Builder.html` in your browser. You can either:
+1. From Finder / double-click: open `index.html` in your browser.
 
-   - Double-click the file in Finder (this opens it directly in your default browser), or
-
-   - Serve the project directory and open the page in your browser (recommended for consistent behavior):
+2. Or serve locally for a stable experience (recommended):
 
 ```bash
 # from the project root
 python3 -m http.server 8000
 # then open in your browser (macOS)
-open http://localhost:8000/PB%20Schedule%20Builder.html
+open http://localhost:8000/index.html
 ```
 
-2. In the page UI:
-   - Paste or type player names into the "Player names" textarea. Names can be separated by newlines or commas.
-   - Set the number of courts (each court uses four players: two teams of two).
-   - Set the number of rounds.
-   - Click "Generate" to build the schedule.
-   - Click "Export" to download a plain-text schedule file.
+How to use the UI
+-----------------
 
-Behavior and notes
-------------------
-- Players per round = `numCourts * 4`. If you provide fewer players than that, the page will alert and won't generate a schedule. If you provide more players, the difference are the players who will sit out each round (the script tries to rotate sit-outs fairly).
-- Names are treated literally and not auto-deduplicated; use unique names for accurate stats.
-- The generator attempts to minimize duplicate partnerships and repeated opponents but is heuristic-based — perfect optimality isn't guaranteed for all combinations.
-- The default player list is prefilled in the UI from the `defaultPlayers` array inside `PB Schedule Builder.html`.
+1. Paste or type player names into the "Player names" textarea. Names can be separated by newlines or commas.
+2. Set the number of courts (each court uses 4 players: two teams of two).
+3. Set the number of rounds.
+4. Toggle "Require exact equality" if you want every player to have exactly the same number of games. If the current configuration cannot satisfy that constraint you can use the Suggestions panel to compute a minimal change (small adjustments to rounds/courts) and apply it.
+5. Click "Generate" to build the schedule. A small overlay appears while the generator runs.
+6. Click "Export" to download a plain-text schedule file.
+
+Behavior and implementation notes
+---------------------------------
+
+- Players-per-round = `numCourts * 4`. If you provide fewer players than that the UI will alert and stop generation. If you provide more players, the extra players will sit out that round; the generator attempts to rotate sit-outs fairly.
+- Exact scheduler: when total play slots (numRounds *numCourts* 4) divides evenly by the number of players the generator will try to give each player exactly the same number of games (it will retry a few randomized attempts before failing).
+- Quota scheduler: when exact equality is impossible the generator assigns a base number of games to every player and gives one extra game to a small set of players so the difference between any two players' game counts is at most 1.
+- Duplicate partnerships: the code builds and maintains partnership maps and tries to avoid repeating partners. The backtracking pairing routine is best-effort and bounded by attempt limits; in some pathological schedules it may fall back to randomized pairings. There's also an early impossibility check that alerts when the total number of team pairings would exceed the number of unique player pairs.
+- Repair pass: after generation a lightweight repair pass fixes any player who appears more than once in the same round by swapping in a suitable replacement (prefer low-played players). If the repair cannot resolve all issues you are warned in the UI/console.
+
+Limitations & next steps
+------------------------
+
+- The "never duplicate partnership" goal is implemented as a best-effort backtracker with attempt caps. Guaranteeing absolute avoidance would require a global exhaustive solver (exponential search) or an integer-program (ILP) formulation and solver.
+- The suggestion search currently looks in a small window around the current rounds/courts values (±6 rounds, ±3 courts). If you have special constraints you may need to adjust those values directly.
+- There are no automated unit tests in this repo yet. Adding reproducible JS tests would help verify no-duplicate and exact-equality properties across seeds.
 
 Troubleshooting
 ---------------
-- "Not enough players" alert: increase the player list or reduce the number of courts.
-- If the UI appears blank or controls do not work, open the browser console (Developer Tools) and check for script errors.
-- If the schedule looks odd, try re-generating (the algorithm uses randomized shuffles to explore options).
 
-Development / Next steps
-------------------------
-- Add automatic duplicate-name detection and normalization (trim/unique).
-- Add save/load configuration (JSON) and printing-friendly view.
-- Allow custom sit-out counts or custom court sizes.
+- "Not enough players" alert: increase the player list or reduce the number of courts.
+- "Require exact equality" warning: if the toggle is checked and exact equality is impossible the UI will either suggest a minimal change or prompt you to adjust rounds/courts.
+- If the generator fails to produce a round or seems to hang, check the browser console for warnings/errors. The app uses randomized attempts and may log retries.
+
+Development notes
+-----------------
+
+- The main application lives entirely in `index.html`. Key functions to look at when changing behavior are:
+  - `generateTournament()` — top-level orchestration.
+  - `scheduleWithExactPlays()` and `scheduleWithPlayQuotas()` — slot-based schedulers.
+  - `selectUniqueGroup()` — picks a per-round unique set of players from remaining quotas.
+  - `makeTeamsNoDuplicate()` — backtracking routine to try to avoid repeating partnerships.
+  - `assertAndRepairTournament()` — post-generation repair pass.
+- If you want to implement a guaranteed solver for duplicate-free pairings, consider modeling the problem as an ILP and using a small WASM or remote solver, or implement a global backtracking search that assigns pairings across rounds (this is more complex but can provide guarantees).
 
 License
 -------
-Feel free to reuse and adapt. No license file provided.
 
-If you'd like, I can also:
-- Add auto-cleanup for duplicate names,
-- Add a print-friendly view/button,
-- Or add a small JS unit test harness to validate the scheduler for specific player/court/round combinations.
-
+Feel free to reuse and adapt. No explicit license file is included in the repo.
