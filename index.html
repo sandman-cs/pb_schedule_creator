@@ -222,7 +222,6 @@
             <div style="display:flex; gap:12px; margin-top:12px; flex-wrap:wrap; align-items:center;">
                 <label>Courts: <input id="numCourts" type="number" min="1" value="1" style="width:80px; margin-left:6px;"></label>
                 <label>Rounds: <input id="numRounds" type="number" min="1" value="10" style="width:80px; margin-left:6px;"></label>
-                <button id="generateBtn" style="padding:8px 12px; border-radius:6px; border:none; background:#4ECDC4; color:#fff; cursor:pointer;">Generate</button>
                 <button id="exportBtn" style="padding:8px 12px; border-radius:6px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Export</button>
             </div>
             <div id="requireExactContainer">
@@ -1022,25 +1021,41 @@
         }
 
         // Wire UI
-        document.getElementById('generateBtn').addEventListener('click', () => {
-            // Show overlay, then wait two animation frames so the browser has a chance to paint
-            showGenerating(true);
-            requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                    try {
-                        generateTournament();
-                    } finally {
-                        showGenerating(false);
-                    }
-                });
-            });
-        });
-
         document.getElementById('exportBtn').addEventListener('click', () => exportTournament());
-        document.getElementById('numCourts').addEventListener('change', (e) => { numCourts = parseInt(e.target.value, 10) || 1; updateSetupSummary(); });
-        document.getElementById('numRounds').addEventListener('change', (e) => { numRounds = parseInt(e.target.value, 10) || 1; updateSetupSummary(); });
-    const reqEl = document.getElementById('requireExact'); if (reqEl) reqEl.addEventListener('change', updateSetupSummary);
-        document.getElementById('playerNames').addEventListener('input', updateSetupSummary);
+        // Auto-generate suggestions and schedules when inputs change. Debounced to avoid rapid re-runs.
+        let autoGenerateTimer = null;
+        let applyingSuggestion = false;
+        function scheduleAutoGenerate() {
+            if (autoGenerateTimer) clearTimeout(autoGenerateTimer);
+            autoGenerateTimer = setTimeout(() => {
+                autoGenerateTimer = null;
+                // Compute suggestions automatically
+                computeSuggestions();
+                // If Require Exact is enabled and a suggestion exists, apply it once
+                const reqEl = document.getElementById('requireExact');
+                const container = document.getElementById('suggestions');
+                const nr = container ? parseInt(container.dataset.suggestNr, 10) : NaN;
+                const nc = container ? parseInt(container.dataset.suggestNc, 10) : NaN;
+                if (reqEl && reqEl.checked && nr && nc) {
+                    applyingSuggestion = true;
+                    applySuggestion();
+                    applyingSuggestion = false;
+                }
+
+                // Now generate the tournament (show overlay and let the browser paint)
+                showGenerating(true);
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        try { generateTournament(); } finally { showGenerating(false); }
+                    });
+                });
+            }, 250);
+        }
+
+        document.getElementById('numCourts').addEventListener('change', (e) => { numCourts = parseInt(e.target.value, 10) || 1; updateSetupSummary(); if (!applyingSuggestion) scheduleAutoGenerate(); });
+        document.getElementById('numRounds').addEventListener('change', (e) => { numRounds = parseInt(e.target.value, 10) || 1; updateSetupSummary(); if (!applyingSuggestion) scheduleAutoGenerate(); });
+        const reqEl = document.getElementById('requireExact'); if (reqEl) reqEl.addEventListener('change', () => { updateSetupSummary(); if (!applyingSuggestion) scheduleAutoGenerate(); });
+        document.getElementById('playerNames').addEventListener('input', () => { updateSetupSummary(); if (!applyingSuggestion) scheduleAutoGenerate(); });
 
         // Suggestions: compute and apply
         function computeSuggestions() {
