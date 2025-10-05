@@ -278,7 +278,7 @@
         // Helper: try to select a group of `perRound` distinct players from remainingCounts
         // remainingCounts: Map(player -> remaining slots)
         // returns array of players or null if cannot find in attempts
-        function selectUniqueGroup(remainingCounts, perRound, maxAttempts = 200) {
+    function selectUniqueGroup(remainingCounts, perRound, maxAttempts = 2000) {
             const playersWithSlots = [...remainingCounts.keys()].filter(p => remainingCounts.get(p) > 0);
             if (playersWithSlots.length < perRound) return null;
 
@@ -300,6 +300,46 @@
                 if (chosen.size === perRound) return [...chosen];
             }
             return null;
+        }
+
+        // Try to form teams (pairs) from `group` such that no pair repeats an existing partnership.
+        // Uses recursive backtracking with a maxAttempts guard and randomization to avoid bad ordering.
+        function makeTeamsNoDuplicate(group, teamPartnerships, maxAttempts = 5000) {
+            if (group.length % 2 !== 0) return null;
+            let attempts = 0;
+            const shuffledStart = shuffleArray(group.slice());
+
+            function backtrack(available, teams) {
+                attempts++;
+                if (attempts > maxAttempts) return null;
+                if (available.length === 0) return teams;
+                // pick the player with fewest possible partners to reduce branching
+                available.sort((a, b) => {
+                    const aOpts = available.filter(x => x !== a && !teamPartnerships.get(a).has(x)).length;
+                    const bOpts = available.filter(x => x !== b && !teamPartnerships.get(b).has(x)).length;
+                    return aOpts - bOpts;
+                });
+                const a = available[0];
+                // possible partners not previously partnered
+                let partners = available.slice(1).filter(b => !teamPartnerships.get(a).has(b));
+                partners = shuffleArray(partners);
+                for (const b of partners) {
+                    const next = available.filter(x => x !== a && x !== b);
+                    const res = backtrack(next, teams.concat([[a, b]]));
+                    if (res) return res;
+                }
+                return null;
+            }
+
+            return backtrack(shuffledStart, []);
+        }
+
+        // Validate that every player has exactly the target plays (or return false)
+        function validateExactEquality(courtCountMap, playersList, targetPlays) {
+            for (const p of playersList) {
+                if ((courtCountMap.get(p) || 0) !== targetPlays) return false;
+            }
+            return true;
         }
 
         function getPlayersFromInput() {
@@ -360,6 +400,15 @@
                 return;
             }
 
+            // Impossibility check: total team partnerships needed vs unique possible pairings
+            const teamsPerRound = (playersPerRound / 2); // number of teams per round
+            const totalTeams = teamsPerRound * numRounds; // total team pairings that will be formed
+            const uniquePairsPossible = (playerCount * (playerCount - 1)) / 2;
+            if (totalTeams > uniquePairsPossible) {
+                alert('Impossible to schedule without duplicate partnerships: too many total teams compared to unique player pairs. Reduce rounds/courts or add players.');
+                return;
+            }
+
             const requireExactEl = document.getElementById('requireExact');
             const requireExact = requireExactEl ? requireExactEl.checked : false;
 
@@ -371,7 +420,24 @@
             if (totalPlaySlots % playerCount === 0) {
                 // exact equality possible
                 const targetPlaysPerPlayer = totalPlaySlots / playerCount;
-                tournament = scheduleWithExactPlays(targetPlaysPerPlayer, teamPartnerships, courtCount, sittingOutCount, playersPerRound);
+                const maxExactAttempts = 6;
+                let exactSucceeded = false;
+                for (let attempt = 0; attempt < maxExactAttempts; attempt++) {
+                    // reset trackers
+                    teamPartnerships.forEach((v, k) => { teamPartnerships.set(k, new Set()); });
+                    courtCount.forEach((v, k) => courtCount.set(k, 0));
+                    sittingOutCount.forEach((v, k) => sittingOutCount.set(k, 0));
+                    tournament = scheduleWithExactPlays(targetPlaysPerPlayer, teamPartnerships, courtCount, sittingOutCount, playersPerRound);
+                    // recompute courtCount from produced tournament
+                    const producedCounts = new Map(); players.forEach(p => producedCounts.set(p, 0));
+                    tournament.forEach(r => r.courts.forEach(c => { [...c.team1, ...c.team2].forEach(p => producedCounts.set(p, producedCounts.get(p) + 1)); }));
+                    if (validateExactEquality(producedCounts, players, targetPlaysPerPlayer)) { exactSucceeded = true; break; }
+                    // else try again (randomized selection will differ)
+                }
+                if (!exactSucceeded) {
+                    alert('Could not produce an exact-equality schedule after multiple attempts. Try adjusting rounds/courts or uncheck Require Exact.');
+                    return;
+                }
             } else {
                 // cannot make every player play exactly the same number of games
                 // distribute quotas so difference is at most 1
@@ -547,9 +613,13 @@
                 // decrement remaining counts
                 group.forEach(p => remaining.set(p, remaining.get(p) - 1));
 
-                const roundPool = shuffleArray(group);
-                const teams = [];
-                for (let i = 0; i < roundPool.length; i += 2) teams.push([roundPool[i], roundPool[i + 1]]);
+                // Try to form teams without repeating partnerships
+                const teams = makeTeamsNoDuplicate(group, teamPartnerships);
+                if (!teams) {
+                    // fall back to random pairing if impossible for this group
+                    const roundPool = shuffleArray(group);
+                    for (let i = 0; i < roundPool.length; i += 2) teams.push([roundPool[i], roundPool[i + 1]]);
+                }
 
                 const courts = [];
                 for (let i = 0; i < numCourts; i++) {
@@ -601,9 +671,12 @@
                 // decrement remaining counts
                 group.forEach(p => remaining.set(p, remaining.get(p) - 1));
 
-                const roundPool = shuffleArray(group);
-                const teams = [];
-                for (let i = 0; i < roundPool.length; i += 2) teams.push([roundPool[i], roundPool[i + 1]]);
+                // Try to form teams without repeating partnerships
+                const teams = makeTeamsNoDuplicate(group, teamPartnerships);
+                if (!teams) {
+                    const roundPool = shuffleArray(group);
+                    for (let i = 0; i < roundPool.length; i += 2) teams.push([roundPool[i], roundPool[i + 1]]);
+                }
 
                 const courts = [];
                 for (let i = 0; i < numCourts; i++) {
@@ -1027,9 +1100,33 @@
         const computeBtn = document.getElementById('computeSuggestionsBtn'); if (computeBtn) computeBtn.addEventListener('click', computeSuggestions);
         const applyBtn = document.getElementById('applySuggestionBtn'); if (applyBtn) applyBtn.addEventListener('click', applySuggestion);
 
+        // Automatically compute and apply a small suggestion when page loads if Require Exact is enabled
+        function autoApplySuggestionIfNeeded() {
+            const reqEl = document.getElementById('requireExact');
+            if (!reqEl || !reqEl.checked) return;
+            const playersList = getPlayersFromInput();
+            const pCount = playersList.length;
+            const currentRounds = parseInt(document.getElementById('numRounds').value, 10) || 1;
+            const currentCourts = parseInt(document.getElementById('numCourts').value, 10) || 1;
+            const playersPerRound = currentCourts * 4;
+            const totalSlots = currentRounds * playersPerRound;
+            if (pCount > 0 && totalSlots % pCount !== 0) {
+                computeSuggestions();
+                const container = document.getElementById('suggestions');
+                const nr = parseInt(container.dataset.suggestNr, 10);
+                const nc = parseInt(container.dataset.suggestNc, 10);
+                if (nr && nc) {
+                    applySuggestion();
+                    console.info(`Auto-applied suggestion: rounds=${nr}, courts=${nc}`);
+                }
+            }
+        }
+
         // Prefill and initial render
         document.getElementById('playerNames').value = defaultPlayers.join('\n');
         updateSetupSummary();
+        // If require-exact is on and current config can't meet equality, compute+apply a small suggestion automatically
+        autoApplySuggestionIfNeeded();
         // Generate initial tournament on load (show overlay while building) and ensure overlay paints first
         showGenerating(true);
         requestAnimationFrame(() => {
