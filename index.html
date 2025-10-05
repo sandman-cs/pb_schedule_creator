@@ -138,13 +138,13 @@
         #requireExactContainer .rx-title {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             font-weight: 700;
-            font-size: 1.05rem;
+            font-size: 0.95rem;
             color: #1f2937;
             letter-spacing: 0.2px;
         }
         #requireExactContainer .rx-desc {
             color: #374151;
-            font-size: 0.95rem;
+            font-size: 0.90rem;
             opacity: 0.95;
             max-width: 60%;
             line-height: 1.25;
@@ -220,8 +220,8 @@
                 <textarea id="playerNames" rows="8" style="width:100%; margin-top:8px;"></textarea>
             </div>
             <div style="display:flex; gap:12px; margin-top:12px; flex-wrap:wrap; align-items:center;">
-                <label>Courts: <input id="numCourts" type="number" min="1" value="5" style="width:80px; margin-left:6px;"></label>
-                <label>Rounds: <input id="numRounds" type="number" min="1" value="11" style="width:80px; margin-left:6px;"></label>
+                <label>Courts: <input id="numCourts" type="number" min="1" value="1" style="width:80px; margin-left:6px;"></label>
+                <label>Rounds: <input id="numRounds" type="number" min="1" value="10" style="width:80px; margin-left:6px;"></label>
                 <button id="generateBtn" style="padding:8px 12px; border-radius:6px; border:none; background:#4ECDC4; color:#fff; cursor:pointer;">Generate</button>
                 <button id="exportBtn" style="padding:8px 12px; border-radius:6px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Export</button>
             </div>
@@ -256,8 +256,8 @@
         // Configurable globals
         let players = [];
         let tournament = [];
-        let numCourts = 2;
-        let numRounds = 10;
+    let numCourts = 1;
+    let numRounds = 10;
 
         // Default players to prefill the textarea
         const defaultPlayers = [
@@ -273,6 +273,33 @@
                 [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
             }
             return shuffled;
+        }
+
+        // Helper: try to select a group of `perRound` distinct players from remainingCounts
+        // remainingCounts: Map(player -> remaining slots)
+        // returns array of players or null if cannot find in attempts
+        function selectUniqueGroup(remainingCounts, perRound, maxAttempts = 200) {
+            const playersWithSlots = [...remainingCounts.keys()].filter(p => remainingCounts.get(p) > 0);
+            if (playersWithSlots.length < perRound) return null;
+
+            for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                // Build an expanded slot list and shuffle it so players with more remaining appear more often
+                const expanded = [];
+                playersWithSlots.forEach(p => {
+                    const cnt = Math.max(1, remainingCounts.get(p));
+                    for (let i = 0; i < cnt; i++) expanded.push(p);
+                });
+                const shuffled = shuffleArray(expanded);
+
+                const chosen = new Set();
+                for (let i = 0; i < shuffled.length && chosen.size < perRound; i++) {
+                    const p = shuffled[i];
+                    if (!chosen.has(p)) chosen.add(p);
+                }
+
+                if (chosen.size === perRound) return [...chosen];
+            }
+            return null;
         }
 
         function getPlayersFromInput() {
@@ -353,7 +380,6 @@
                 const extra = totalPlaySlots % playerCount; // number of players who should play (base+1)
                 tournament = scheduleWithPlayQuotas(base, extra, teamPartnerships, courtCount, sittingOutCount, playersPerRound);
             }
-
             // If scheduler functions already produced rounds, skip the older per-round generator.
             if (!tournament || tournament.length === 0) {
                 for (let round = 1; round <= numRounds; round++) {
@@ -380,45 +406,151 @@
             }
 
             displayTournament();
-            displayStats(teamPartnerships, courtCount, sittingOutCount);
+            // Run an assertion + repair pass to ensure no player appears twice in a round
+            const repaired = assertAndRepairTournament(tournament, players, numCourts, numRounds);
+            // Use the recomputed trackers for stats/display
+            displayTournament();
+            displayStats(repaired.teamPartnerships, repaired.courtCount, repaired.sittingOutCount);
             updateSetupSummary();
+        }
+
+        // Scan tournament for players appearing more than once in a single round and attempt repairs.
+        // Returns recomputed trackers: { teamPartnerships, courtCount, sittingOutCount }
+        function assertAndRepairTournament(tournamentData, playersList, courts, roundsCount) {
+            // Build per-player counts
+            const playerCount = playersList.length;
+            const playersPerRound = courts * 4;
+            const totalSlots = roundsCount * playersPerRound;
+            const maxAllowed = Math.ceil(totalSlots / Math.max(1, playerCount));
+            const minAllowed = Math.floor(totalSlots / Math.max(1, playerCount));
+
+            // Build current court counts from tournament
+            const courtCount = new Map();
+            playersList.forEach(p => courtCount.set(p, 0));
+            tournamentData.forEach(r => r.courts.forEach(c => {
+                [...c.team1, ...c.team2].forEach(p => courtCount.set(p, (courtCount.get(p) || 0) + 1));
+            }));
+
+            // Attempt to repair duplicates per round
+            let repairs = 0;
+            tournamentData.forEach(roundData => {
+                // flatten players in round
+                const inRound = [];
+                roundData.courts.forEach(c => { inRound.push(...c.team1); inRound.push(...c.team2); });
+                const freq = new Map();
+                inRound.forEach(p => freq.set(p, (freq.get(p) || 0) + 1));
+
+                // for any player appearing more than once, replace extra occurrences
+                for (const [player, cnt] of [...freq.entries()]) {
+                    let extra = cnt - 1;
+                    while (extra > 0) {
+                        // find a replacement not currently in the round and with courtCount < maxAllowed (prefer low-played)
+                        const candidates = playersList.filter(p => !inRound.includes(p)).sort((a, b) => (courtCount.get(a) || 0) - (courtCount.get(b) || 0));
+                        let replacement = candidates.find(p => (courtCount.get(p) || 0) < maxAllowed) || candidates[0];
+                        if (!replacement) {
+                            console.warn('No replacement candidate found while repairing round', roundData.round);
+                            break;
+                        }
+
+                        // locate a court and team slot to replace one occurrence of `player`
+                        let replaced = false;
+                        for (const court of roundData.courts) {
+                            for (const teamKey of ['team1', 'team2']) {
+                                const team = court[teamKey];
+                                for (let i = 0; i < team.length; i++) {
+                                    if (team[i] === player) {
+                                        // ensure replacement isn't already in the team (shouldn't be since not in round)
+                                        team[i] = replacement;
+                                        // update inRound and counts
+                                        inRound.splice(inRound.indexOf(player), 1);
+                                        inRound.push(replacement);
+                                        courtCount.set(player, courtCount.get(player) - 1);
+                                        courtCount.set(replacement, (courtCount.get(replacement) || 0) + 1);
+                                        repairs++;
+                                        replaced = true;
+                                        break;
+                                    }
+                                }
+                                if (replaced) break;
+                            }
+                            if (replaced) break;
+                        }
+
+                        if (!replaced) {
+                            console.warn('Could not replace duplicate player in round', roundData.round, player);
+                            break;
+                        }
+
+                        extra--;
+                    }
+                }
+            });
+
+            if (repairs > 0) console.info(`Repaired ${repairs} duplicate player occurrence(s) across rounds`);
+
+            // Recompute trackers from repaired tournament
+            const teamPartnerships = new Map();
+            const sittingOutCount = new Map();
+            const newCourtCount = new Map();
+            playersList.forEach(p => { teamPartnerships.set(p, new Set()); sittingOutCount.set(p, 0); newCourtCount.set(p, 0); });
+
+            tournamentData.forEach(r => {
+                r.courts.forEach(c => {
+                    const t1 = c.team1, t2 = c.team2;
+                    // partnerships
+                    teamPartnerships.get(t1[0]).add(t1[1]);
+                    teamPartnerships.get(t1[1]).add(t1[0]);
+                    teamPartnerships.get(t2[0]).add(t2[1]);
+                    teamPartnerships.get(t2[1]).add(t2[0]);
+                    // counts
+                    t1.forEach(p => newCourtCount.set(p, newCourtCount.get(p) + 1));
+                    t2.forEach(p => newCourtCount.set(p, newCourtCount.get(p) + 1));
+                });
+                const sitting = playersList.filter(p => !r.courts.some(c => [...c.team1, ...c.team2].includes(p)));
+                sitting.forEach(p => sittingOutCount.set(p, sittingOutCount.get(p) + 1));
+            });
+
+            // Verify no duplicates remain; if they do, log and alert for manual inspection
+            let remainingDup = 0;
+            tournamentData.forEach(r => {
+                const inRound = [];
+                r.courts.forEach(c => { inRound.push(...c.team1); inRound.push(...c.team2); });
+                const freq = new Map(); inRound.forEach(p => freq.set(p, (freq.get(p) || 0) + 1));
+                for (const [, cnt] of freq) if (cnt > 1) remainingDup += (cnt - 1);
+            });
+            if (remainingDup > 0) {
+                console.error('Repair pass could not eliminate all duplicate-in-round occurrences:', remainingDup);
+                alert('Warning: schedule repair could not fully resolve duplicate player occurrences. Please review the generated schedule.');
+            }
+
+            return { teamPartnerships, courtCount: newCourtCount, sittingOutCount };
         }
 
         // Schedule when exact equal plays per player is possible
         function scheduleWithExactPlays(targetPlaysPerPlayer, teamPartnerships, courtCount, sittingOutCount, playersPerRound) {
             // Build a slot array where each player appears exactly targetPlaysPerPlayer times.
-            const slots = [];
-            players.forEach(p => {
-                for (let i = 0; i < targetPlaysPerPlayer; i++) slots.push(p);
-            });
-
-            // Shuffle slots to randomize distribution
-            const shuffledSlots = shuffleArray(slots);
+            // We'll track remaining slots per player and pick unique groups each round
+            const remaining = new Map();
+            players.forEach(p => remaining.set(p, targetPlaysPerPlayer));
 
             const rounds = [];
             const totalRounds = numRounds;
             const perRound = playersPerRound;
 
-            // Sanity check
-            if (shuffledSlots.length !== totalRounds * perRound) {
-                console.warn('Slot count mismatch in scheduleWithExactPlays');
-            }
-
             for (let r = 0; r < totalRounds; r++) {
-                const start = r * perRound;
-                const group = shuffledSlots.slice(start, start + perRound);
-                // If group smaller than needed (shouldn't happen), fill with players with remaining slots
-                if (group.length < perRound) {
-                    console.warn('Not enough players for round', r + 1);
+                const group = selectUniqueGroup(remaining, perRound);
+                if (!group) {
+                    console.warn('Could not build unique group for round', r + 1);
                     break;
                 }
 
-                // Pair by shuffling the group's players and pairing adjacent ones
+                // decrement remaining counts
+                group.forEach(p => remaining.set(p, remaining.get(p) - 1));
+
                 const roundPool = shuffleArray(group);
                 const teams = [];
                 for (let i = 0; i < roundPool.length; i += 2) teams.push([roundPool[i], roundPool[i + 1]]);
 
-                // Build courts: pair teams in order
                 const courts = [];
                 for (let i = 0; i < numCourts; i++) {
                     const t1 = teams[i * 2];
@@ -427,7 +559,6 @@
                 }
 
                 const sittingOut = players.filter(p => !group.includes(p));
-
                 const roundData = { round: r + 1, courts, sittingOut };
                 rounds.push(roundData);
 
@@ -448,28 +579,27 @@
 
         // Schedule when exact equality impossible: give 'extra' players one more play (base+1), others base
         function scheduleWithPlayQuotas(base, extra, teamPartnerships, courtCount, sittingOutCount, playersPerRound) {
-            // Build slot array where 'extra' players get base+1 slots and others get base
-            const slots = [];
-            // Shuffle players to choose which get the extra slot
+            // Build remaining quotas map: pick which players get the extra slot
             const pickOrder = shuffleArray([...players]);
+            const remaining = new Map();
             for (let i = 0; i < players.length; i++) {
                 const p = pickOrder[i];
                 const quota = base + (i < extra ? 1 : 0);
-                for (let q = 0; q < quota; q++) slots.push(p);
+                remaining.set(p, quota);
             }
 
-            const shuffledSlots = shuffleArray(slots);
             const rounds = [];
             const totalRounds = numRounds;
             const perRound = playersPerRound;
 
             for (let r = 0; r < totalRounds; r++) {
-                const start = r * perRound;
-                const group = shuffledSlots.slice(start, start + perRound);
-                if (group.length < perRound) {
-                    console.warn('Not enough players for round', r + 1);
+                const group = selectUniqueGroup(remaining, perRound);
+                if (!group) {
+                    console.warn('Could not build unique group for round', r + 1);
                     break;
                 }
+                // decrement remaining counts
+                group.forEach(p => remaining.set(p, remaining.get(p) - 1));
 
                 const roundPool = shuffleArray(group);
                 const teams = [];
