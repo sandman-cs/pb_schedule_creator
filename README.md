@@ -16,6 +16,12 @@ What’s new (recent changes)
 - Per-round uniqueness: selection of players for each round guarantees a player won't appear twice in the same round.
 - Duplicate-partnership avoidance: when forming teams inside a round the generator uses a best-effort backtracking algorithm to avoid reusing partnerships from earlier rounds. If the backtracker cannot find a pairing quickly it falls back to randomized pairing.
 - Assertion & repair pass: after generation a repair pass fixes any remaining duplicated player occurrences inside a round (preferentially replacing with low-played players) and recomputes statistics.
+- Robustness improvements (recent): the schedulers are now more defensive to reduce failures when the randomized heuristics struggle. Changes include:
+  - Deterministic fallback selection: if the randomized unique-group selector can't find a group within its attempt budget the code now falls back to a deterministic greedy pick so generation can continue when a solution likely exists.
+  - Defensive team filling: team arrays are always initialized and shortfalls are filled with randomized pairs so courts are fully populated (avoids malformed rounds).
+  - Partnership guards: partnership updates are guarded against malformed teams to avoid runtime errors.
+  - More attempts & smarter fallback: the exact scheduler retries many more randomized attempts (increased attempt cap) and, when exact-equality cannot be achieved by the heuristics, the generator will automatically fall back to the quota scheduler if "Require exact equality" is not checked.
+  - Console diagnostics: when exact scheduling attempts fail the app logs per-attempt min/max produced counts to the browser console to help debugging.
 
 Files
 -----
