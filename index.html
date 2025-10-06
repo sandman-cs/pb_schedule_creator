@@ -420,7 +420,9 @@
             if (totalPlaySlots % playerCount === 0) {
                 // exact equality possible
                 const targetPlaysPerPlayer = totalPlaySlots / playerCount;
-                const maxExactAttempts = 6;
+                // Increase attempts to improve chance of finding a valid exact schedule
+                // for randomized group/teaming heuristics.
+                const maxExactAttempts = 60;
                 let exactSucceeded = false;
                 for (let attempt = 0; attempt < maxExactAttempts; attempt++) {
                     // reset trackers
@@ -433,10 +435,24 @@
                     tournament.forEach(r => r.courts.forEach(c => { [...c.team1, ...c.team2].forEach(p => producedCounts.set(p, producedCounts.get(p) + 1)); }));
                     if (validateExactEquality(producedCounts, players, targetPlaysPerPlayer)) { exactSucceeded = true; break; }
                     // else try again (randomized selection will differ)
+                    console.info(`Exact attempt ${attempt + 1}/${maxExactAttempts} failed; produced distribution min=${Math.min(...[...producedCounts.values()])}, max=${Math.max(...[...producedCounts.values()])}`);
                 }
                 if (!exactSucceeded) {
-                    alert('Could not produce an exact-equality schedule after multiple attempts. Try adjusting rounds/courts or uncheck Require Exact.');
-                    return;
+                    // If the user didn't require exact equality, fall back to quota scheduling
+                    if (!requireExact) {
+                        console.warn('Exact-equality scheduling failed after multiple attempts; falling back to quota scheduler.');
+                        const base = Math.floor(totalPlaySlots / playerCount);
+                        const extra = totalPlaySlots % playerCount;
+                        tournament = scheduleWithPlayQuotas(base, extra, teamPartnerships, courtCount, sittingOutCount, playersPerRound);
+                    } else {
+                        // Provide more diagnostics in the alert to help users adjust their inputs.
+                        const producedCounts = new Map(); players.forEach(p => producedCounts.set(p, 0));
+                        if (tournament) tournament.forEach(r => r.courts.forEach(c => { [...c.team1, ...c.team2].forEach(p => producedCounts.set(p, producedCounts.get(p) + 1)); }));
+                        const minC = producedCounts.size ? Math.min(...[...producedCounts.values()]) : 0;
+                        const maxC = producedCounts.size ? Math.max(...[...producedCounts.values()]) : 0;
+                        alert(`Could not produce an exact-equality schedule after ${maxExactAttempts} attempts. Try adjusting rounds/courts or uncheck Require Exact.\nPlayers: ${playerCount}, Courts: ${numCourts}, Rounds: ${numRounds}, produced per-player min=${minC}, max=${maxC}`);
+                        return;
+                    }
                 }
             } else {
                 // cannot make every player play exactly the same number of games
@@ -604,21 +620,49 @@
             const perRound = playersPerRound;
 
             for (let r = 0; r < totalRounds; r++) {
-                const group = selectUniqueGroup(remaining, perRound);
+                // Prefer to use the randomized unique group selector but fall back to
+                // a deterministic selection if it fails. The randomized selector can
+                // occasionally not find a valid group within its attempts even when
+                // a valid arrangement exists; this fallback improves robustness.
+                let group = selectUniqueGroup(remaining, perRound);
                 if (!group) {
-                    console.warn('Could not build unique group for round', r + 1);
-                    break;
+                    // Deterministic greedy selection: pick players with highest remaining
+                    // slots (ties broken randomly). This will only fail if there simply
+                    // aren't enough distinct players with remaining slots.
+                    const playersWithSlots = [...remaining.keys()].filter(p => remaining.get(p) > 0);
+                    if (playersWithSlots.length < perRound) {
+                        console.warn('Could not build unique group for round', r + 1, '- not enough players with remaining slots');
+                        break;
+                    }
+                    // sort by remaining desc, tie-break randomly
+                    const tieShuffled = shuffleArray(playersWithSlots);
+                    tieShuffled.sort((a, b) => remaining.get(b) - remaining.get(a));
+                    group = tieShuffled.slice(0, perRound);
                 }
 
                 // decrement remaining counts
-                group.forEach(p => remaining.set(p, remaining.get(p) - 1));
+                group.forEach(p => remaining.set(p, Math.max(0, remaining.get(p) - 1)));
 
                 // Try to form teams without repeating partnerships
-                const teams = makeTeamsNoDuplicate(group, teamPartnerships);
+                let teams = makeTeamsNoDuplicate(group, teamPartnerships);
                 if (!teams) {
                     // fall back to random pairing if impossible for this group
-                    const roundPool = shuffleArray(group);
+                    teams = [];
+                    const roundPool = shuffleArray(group.slice());
                     for (let i = 0; i < roundPool.length; i += 2) teams.push([roundPool[i], roundPool[i + 1]]);
+                }
+
+                // Defensive: ensure we have enough teams to populate all courts.
+                // If for some reason teams are short, fill with random pairs from the group.
+                const teamsNeeded = numCourts * 2;
+                if (teams.length < teamsNeeded) {
+                    const extraPool = shuffleArray(group.slice());
+                    while (teams.length < teamsNeeded) {
+                        if (extraPool.length < 2) extraPool.push(...shuffleArray(group.slice()));
+                        const a = extraPool.pop();
+                        const b = extraPool.pop();
+                        teams.push([a, b]);
+                    }
                 }
 
                 const courts = [];
@@ -636,10 +680,15 @@
                 roundData.courts.forEach(court => {
                     court.team1.forEach(p => courtCount.set(p, (courtCount.get(p) || 0) + 1));
                     court.team2.forEach(p => courtCount.set(p, (courtCount.get(p) || 0) + 1));
-                    teamPartnerships.get(court.team1[0]).add(court.team1[1]);
-                    teamPartnerships.get(court.team1[1]).add(court.team1[0]);
-                    teamPartnerships.get(court.team2[0]).add(court.team2[1]);
-                    teamPartnerships.get(court.team2[1]).add(court.team2[0]);
+                    // guard against malformed teams
+                    if (court.team1 && court.team1.length >= 2) {
+                        teamPartnerships.get(court.team1[0]).add(court.team1[1]);
+                        teamPartnerships.get(court.team1[1]).add(court.team1[0]);
+                    }
+                    if (court.team2 && court.team2.length >= 2) {
+                        teamPartnerships.get(court.team2[0]).add(court.team2[1]);
+                        teamPartnerships.get(court.team2[1]).add(court.team2[0]);
+                    }
                 });
                 roundData.sittingOut.forEach(p => sittingOutCount.set(p, (sittingOutCount.get(p) || 0) + 1));
             }
@@ -663,19 +712,40 @@
             const perRound = playersPerRound;
 
             for (let r = 0; r < totalRounds; r++) {
-                const group = selectUniqueGroup(remaining, perRound);
+                // Prefer randomized selection but fall back to a deterministic greedy
+                // pick when selectUniqueGroup can't find a group.
+                let group = selectUniqueGroup(remaining, perRound);
                 if (!group) {
-                    console.warn('Could not build unique group for round', r + 1);
-                    break;
+                    const playersWithSlots = [...remaining.keys()].filter(p => remaining.get(p) > 0);
+                    if (playersWithSlots.length < perRound) {
+                        console.warn('Could not build unique group for round', r + 1, '- not enough players with remaining slots');
+                        break;
+                    }
+                    const tieShuffled = shuffleArray(playersWithSlots);
+                    tieShuffled.sort((a, b) => remaining.get(b) - remaining.get(a));
+                    group = tieShuffled.slice(0, perRound);
                 }
+
                 // decrement remaining counts
-                group.forEach(p => remaining.set(p, remaining.get(p) - 1));
+                group.forEach(p => remaining.set(p, Math.max(0, remaining.get(p) - 1)));
 
                 // Try to form teams without repeating partnerships
-                const teams = makeTeamsNoDuplicate(group, teamPartnerships);
+                let teams = makeTeamsNoDuplicate(group, teamPartnerships);
                 if (!teams) {
-                    const roundPool = shuffleArray(group);
+                    teams = [];
+                    const roundPool = shuffleArray(group.slice());
                     for (let i = 0; i < roundPool.length; i += 2) teams.push([roundPool[i], roundPool[i + 1]]);
+                }
+
+                const teamsNeeded = numCourts * 2;
+                if (teams.length < teamsNeeded) {
+                    const extraPool = shuffleArray(group.slice());
+                    while (teams.length < teamsNeeded) {
+                        if (extraPool.length < 2) extraPool.push(...shuffleArray(group.slice()));
+                        const a = extraPool.pop();
+                        const b = extraPool.pop();
+                        teams.push([a, b]);
+                    }
                 }
 
                 const courts = [];
@@ -692,10 +762,14 @@
                 roundData.courts.forEach(court => {
                     court.team1.forEach(p => courtCount.set(p, (courtCount.get(p) || 0) + 1));
                     court.team2.forEach(p => courtCount.set(p, (courtCount.get(p) || 0) + 1));
-                    teamPartnerships.get(court.team1[0]).add(court.team1[1]);
-                    teamPartnerships.get(court.team1[1]).add(court.team1[0]);
-                    teamPartnerships.get(court.team2[0]).add(court.team2[1]);
-                    teamPartnerships.get(court.team2[1]).add(court.team2[0]);
+                    if (court.team1 && court.team1.length >= 2) {
+                        teamPartnerships.get(court.team1[0]).add(court.team1[1]);
+                        teamPartnerships.get(court.team1[1]).add(court.team1[0]);
+                    }
+                    if (court.team2 && court.team2.length >= 2) {
+                        teamPartnerships.get(court.team2[0]).add(court.team2[1]);
+                        teamPartnerships.get(court.team2[1]).add(court.team2[0]);
+                    }
                 });
                 roundData.sittingOut.forEach(p => sittingOutCount.set(p, (sittingOutCount.get(p) || 0) + 1));
             }
@@ -1023,14 +1097,23 @@
 
         // Wire UI
         document.getElementById('generateBtn').addEventListener('click', () => {
+            const btn = document.getElementById('generateBtn');
+            if (btn.disabled) return; // already running
+            btn.disabled = true;
             // Show overlay, then wait two animation frames so the browser has a chance to paint
             showGenerating(true);
             requestAnimationFrame(() => {
                 requestAnimationFrame(() => {
                     try {
-                        generateTournament();
+                        try {
+                            generateTournament();
+                        } catch (err) {
+                            console.error('Error during generateTournament:', err);
+                            alert('An error occurred while generating the tournament. See console for details.');
+                        }
                     } finally {
                         showGenerating(false);
+                        btn.disabled = false;
                     }
                 });
             });
