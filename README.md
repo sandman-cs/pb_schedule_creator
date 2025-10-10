@@ -1,92 +1,92 @@
-
 PB Schedule Creator (index.html)
 ================================
 
-This is a single-file, client-side pickleball schedule generator. Give it a list of players, a number of courts and rounds, and it will produce per-round pairings while trying to balance court time, rotate sit-outs, and minimize repeated partnerships and opponent repeats.
+Single-file, client-side pickleball schedule generator. Paste a list of players, set courts and rounds, and click Generate to produce per-round pairings. The generator prioritizes balanced court time, rotated sit-outs, and minimizing repeated partnerships/opponents.
 
-What’s new (recent changes)
+What's new (recent)
+-------------------
 
----------------------------
-
-- Require exact equality toggle: a UI checkbox ("Require exact equality") lets you insist that every player plays exactly the same number of games. When enabled the generator will either produce an exact-equality schedule or inform you it's impossible with the current configuration.
-- Suggestions panel: a small helper computes minimal changes to rounds/courts (within a small search window) to make exact equality possible, and you can apply those changes with one click. The app can auto-apply this suggestion at load when the toggle is enabled.
-- Exact/quota schedulers: the generator now contains two slot-based schedulers:
-  - An exact scheduler that assigns every player the same number of play slots when total slots divide evenly by number of players.
-  - A quota scheduler that distributes slots so counts differ by at most 1 when exact equality isn't possible.
-- Per-round uniqueness: selection of players for each round guarantees a player won't appear twice in the same round.
-- Duplicate-partnership avoidance: when forming teams inside a round the generator uses a best-effort backtracking algorithm to avoid reusing partnerships from earlier rounds. If the backtracker cannot find a pairing quickly it falls back to randomized pairing.
-- Assertion & repair pass: after generation a repair pass fixes any remaining duplicated player occurrences inside a round (preferentially replacing with low-played players) and recomputes statistics.
-- Robustness improvements (recent): the schedulers are now more defensive to reduce failures when the randomized heuristics struggle. Changes include:
-  - Deterministic fallback selection: if the randomized unique-group selector can't find a group within its attempt budget the code now falls back to a deterministic greedy pick so generation can continue when a solution likely exists.
-  - Defensive team filling: team arrays are always initialized and shortfalls are filled with randomized pairs so courts are fully populated (avoids malformed rounds).
-  - Partnership guards: partnership updates are guarded against malformed teams to avoid runtime errors.
-  - More attempts & smarter fallback: the exact scheduler retries many more randomized attempts (increased attempt cap) and, when exact-equality cannot be achieved by the heuristics, the generator will automatically fall back to the quota scheduler if "Require exact equality" is not checked.
-  - Console diagnostics: when exact scheduling attempts fail the app logs per-attempt min/max produced counts to the browser console to help debugging.
+- Suggestions auto-compute when you change players, courts, rounds, or the "Require exact equality" toggle.
+- "Require exact equality" (checkbox) enforces that every player gets the exact same number of games when mathematically possible.
+- Suggestions banner shows minimal adjustments (rounds / courts) that would make exact equality possible; Apply updates the inputs. An Undo is available after applying.
+- Pretty Export: download a visually formatted HTML export of the generated rounds & courts.
+- Robustness improvements:
+  - Deterministic fallback group selection when randomized selection struggles.
+  - Defensive team filling so courts are always populated.
+  - Best-effort backtracking pairing to avoid duplicate partnerships (with guarded fallbacks).
+  - Post-generation assert-and-repair pass to fix duplicated players-per-round.
+  - More retry attempts and console diagnostics for exact-scheduler failures.
 
 Files
 -----
 
-- `index.html` — The single-page app. Open it in a browser to use the UI.
+- `index.html` — The single-page app (UI + scheduler + exports).
+- `README.md` — This file.
 
-Quick start (open and run)
--------------------------
+Quick start
+-----------
 
-1. From Finder / double-click: open `index.html` in your browser.
+1. Open the app:
+   - Double-click `index.html` or serve locally:
 
-2. Or serve locally for a stable experience (recommended):
+     ```bash
+     python3 -m http.server 8000
+     open http://localhost:8000/index.html
+     ```
 
-```bash
-# from the project root
-python3 -m http.server 8000
-# then open in your browser (macOS)
-open http://localhost:8000/index.html
-```
+2. Controls:
+   - Player names: paste newline- or comma-separated names.
+   - Courts: number of courts (4 players per court).
+   - Rounds: number of rounds.
+   - Require exact equality: if checked, generator will only accept configurations that allow exact per-player game counts (or you can Apply a suggested small change).
+   - Generate: click to build the schedule.
+   - Export: download a plain-text schedule.
+   - Pretty Export: download an HTML file that visually mirrors the on-page rounds & courts.
 
-How to use the UI
------------------
+Behavior & implementation notes
+--------------------------------
 
-1. Paste or type player names into the "Player names" textarea. Names can be separated by newlines or commas.
-2. Set the number of courts (each court uses 4 players: two teams of two).
-3. Set the number of rounds.
-4. Toggle "Require exact equality" if you want every player to have exactly the same number of games. If the current configuration cannot satisfy that constraint you can use the Suggestions panel to compute a minimal change (small adjustments to rounds/courts) and apply it.
-5. Click "Generate" to build the schedule. A small overlay appears while the generator runs.
-6. Click "Export" to download a plain-text schedule file.
+- Players-per-round = `numCourts * 4`. If fewer players than that are provided the UI warns and stops generation for that configuration.
+- Exact scheduler: used when total play slots (numRounds *numCourts* 4) divides evenly by player count — the scheduler tries multiple randomized attempts (with deterministic fallback) to produce exact equality.
+- Quota scheduler: used when exact equality isn't possible — distributes base plays to all players and gives one extra to a small set so the max difference is 1.
+- Per-round uniqueness: no player is placed twice in the same round.
+- Duplicate partnerships: the generator uses a bounded backtracking routine to avoid repeating partners. If the backtracker cannot find a pairing within its attempt budget, it falls back to randomized pairing for that round.
+- Assertion & repair: after generation, a repair pass replaces duplicates (players appearing >1 in a round) with suitable substitutes and recomputes stats.
+- Impossibility check: an early check compares required team pairings with the number of unique pairs available and will warn if the schedule is impossible without duplicate partnerships.
 
-Behavior and implementation notes
----------------------------------
+Pretty Export
+-------------
 
-- Players-per-round = `numCourts * 4`. If you provide fewer players than that the UI will alert and stop generation. If you provide more players, the extra players will sit out that round; the generator attempts to rotate sit-outs fairly.
-- Exact scheduler: when total play slots (numRounds *numCourts* 4) divides evenly by the number of players the generator will try to give each player exactly the same number of games (it will retry a few randomized attempts before failing).
-- Quota scheduler: when exact equality is impossible the generator assigns a base number of games to every player and gives one extra game to a small set of players so the difference between any two players' game counts is at most 1.
-- Duplicate partnerships: the code builds and maintains partnership maps and tries to avoid repeating partners. The backtracking pairing routine is best-effort and bounded by attempt limits; in some pathological schedules it may fall back to randomized pairings. There's also an early impossibility check that alerts when the total number of team pairings would exceed the number of unique player pairs.
-- Repair pass: after generation a lightweight repair pass fixes any player who appears more than once in the same round by swapping in a suitable replacement (prefer low-played players). If the repair cannot resolve all issues you are warned in the UI/console.
-
-Limitations & next steps
-------------------------
-
-- The "never duplicate partnership" goal is implemented as a best-effort backtracker with attempt caps. Guaranteeing absolute avoidance would require a global exhaustive solver (exponential search) or an integer-program (ILP) formulation and solver.
-- The suggestion search currently looks in a small window around the current rounds/courts values (±6 rounds, ±3 courts). If you have special constraints you may need to adjust those values directly.
-- There are no automated unit tests in this repo yet. Adding reproducible JS tests would help verify no-duplicate and exact-equality properties across seeds.
+- Click "Pretty Export" after generating to download an HTML file that visually represents rounds, courts, teams, and sitting-out players.
+- The exported HTML is standalone and useable for printing or sharing.
 
 Troubleshooting
 ---------------
 
-- "Not enough players" alert: increase the player list or reduce the number of courts.
-- "Require exact equality" warning: if the toggle is checked and exact equality is impossible the UI will either suggest a minimal change or prompt you to adjust rounds/courts.
-- If the generator fails to produce a round or seems to hang, check the browser console for warnings/errors. The app uses randomized attempts and may log retries.
+- Generate does nothing / UI seems stuck: open DevTools → Console for errors. The Generate button is disabled while the generator runs to prevent concurrent execution.
+- "Require exact equality" warning: if exact equality is impossible with current inputs, use the Suggestions banner to Apply a minimal change (or uncheck the toggle).
+- If exact-scheduler repeatedly fails: the app logs per-attempt min/max player counts to the console for diagnosis. If failures persist, consider changing rounds/courts or use the Suggestions to find a nearby valid configuration.
 
-Development notes
------------------
+Limitations & next steps
+------------------------
 
-- The main application lives entirely in `index.html`. Key functions to look at when changing behavior are:
-  - `generateTournament()` — top-level orchestration.
-  - `scheduleWithExactPlays()` and `scheduleWithPlayQuotas()` — slot-based schedulers.
-  - `selectUniqueGroup()` — picks a per-round unique set of players from remaining quotas.
-  - `makeTeamsNoDuplicate()` — backtracking routine to try to avoid repeating partnerships.
-  - `assertAndRepairTournament()` — post-generation repair pass.
-- If you want to implement a guaranteed solver for duplicate-free pairings, consider modeling the problem as an ILP and using a small WASM or remote solver, or implement a global backtracking search that assigns pairings across rounds (this is more complex but can provide guarantees).
+- "Never duplicate partnership" is best-effort. Guaranteeing zero repeated partnerships requires a global exhaustive solver (exponential) or ILP; planned as an optional, higher-effort feature.
+- Suggestion search window is modest (currently small deltas around current rounds/courts). If needed, increase the search window or try manual adjustments.
+- No automated unit tests yet. Adding reproducible JS tests would help lock behavior.
+
+Developer notes
+---------------
+
+Primary functions to inspect in `index.html`:
+
+- `generateTournament()` — orchestrates scheduling and rendering.
+- `scheduleWithExactPlays()` / `scheduleWithPlayQuotas()` — slot-based schedulers.
+- `selectUniqueGroup()` — per-round unique player selection from remaining quotas.
+- `makeTeamsNoDuplicate()` — backtracking pairing to avoid repeating partners.
+- `assertAndRepairTournament()` — post-generation repair pass.
+- `prettyExportTournament()` — builds and downloads the visual HTML export.
 
 License
 -------
 
-Feel free to reuse and adapt. No explicit license file is included in the repo.
+Reuse and adapt freely. No explicit license file is provided.
