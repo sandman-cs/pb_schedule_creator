@@ -224,6 +224,7 @@
                 <label>Rounds: <input id="numRounds" type="number" min="1" value="10" style="width:80px; margin-left:6px;"></label>
                 <button id="generateBtn" style="padding:8px 12px; border-radius:6px; border:none; background:#4ECDC4; color:#fff; cursor:pointer;">Generate</button>
                 <button id="exportBtn" style="padding:8px 12px; border-radius:6px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Export</button>
+                <button id="prettyExportBtn" style="padding:8px 12px; border-radius:6px; border:none; background:#6C5CE7; color:#fff; cursor:pointer;">Pretty Export</button>
             </div>
             <div id="requireExactContainer">
                 <input id="requireExact" type="checkbox" checked style="width:20px; height:20px;">
@@ -1082,6 +1083,61 @@
         }
 
         
+                 // Pretty Export: generate an HTML file that visually mirrors the page's rounds & courts
+                 function prettyExportTournament() {
+                     if (!tournament || tournament.length === 0) {
+                         alert('No tournament to export. Please Generate first.');
+                         return;
+                     }
+                     const title = "Leni's Pickleball Tournament";
+                     const style = `
+                         body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;padding:20px;color:#222;}
+                         .container{max-width:900px;margin:0 auto;}
+                         h1{text-align:center;color:#333;}
+                         .round{margin:18px 0;padding:14px;border-radius:8px;border-left:6px solid #4ECDC4;background:#fafafa;box-shadow:0 6px 18px rgba(0,0,0,0.06);}
+                         .round h3{margin:0 0 10px 0;color:#333;}
+                         .courts{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;}
+                         .court{background:#fff;border-radius:8px;padding:10px;border:1px solid #e8eef6;}
+                         .court-title{text-align:center;font-weight:700;margin-bottom:8px;color:#495057;}
+                         .team{padding:6px 8px;border-radius:12px;text-align:center;margin:6px 0;}
+                         .team1{background:linear-gradient(45deg,#FFE0B2,#FFCC80);}
+                         .team2{background:linear-gradient(45deg,#E1F5FE,#B3E5FC);}
+                         .vs{text-align:center;font-weight:700;margin:6px 0;}
+                         .sitting-out{margin-top:10px;padding:8px;border-left:4px solid #FF9800;background:#fff8e6;border-radius:6px;}
+                     `;
+        
+                     let html = `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>${style}</style></head><body><div class="container"><h1>${title}</h1>`;
+                     tournament.forEach(rd => {
+                         html += `<div class="round"><h3>Round ${rd.round}</h3><div class="courts">`;
+                         rd.courts.forEach(c => {
+                             const t1 = c.team1 ? c.team1.join(' & ') : '';
+                             const t2 = c.team2 ? c.team2.join(' & ') : '';
+                             html += `<div class="court"><div class="court-title">Court ${c.number}</div><div class="team team1">${t1}</div><div class="vs">vs</div><div class="team team2">${t2}</div></div>`;
+                         });
+                         html += `</div>`;
+                         if (rd.sittingOut && rd.sittingOut.length) {
+                             html += `<div class="sitting-out"><strong>Sitting Out:</strong> ${rd.sittingOut.join(', ')}</div>`;
+                         }
+                         html += `</div>`;
+                     });
+                     html += `</div></body></html>`;
+        
+                     const blob = new Blob([html], { type: 'text/html' });
+                     const url = URL.createObjectURL(blob);
+                     const a = document.createElement('a');
+                     a.href = url;
+                     a.download = 'pickleball_tournament_pretty.html';
+                     document.body.appendChild(a);
+                     a.click();
+                     document.body.removeChild(a);
+                     URL.revokeObjectURL(url);
+                 }
+        
+                 // Wire pretty export button
+                 const prettyBtn = document.getElementById('prettyExportBtn');
+                 if (prettyBtn) prettyBtn.addEventListener('click', prettyExportTournament);
+    
+
 
         // Helper to show/hide generating overlay
         function showGenerating(show) {
