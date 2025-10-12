@@ -639,9 +639,21 @@
                 playersPerRound === playerCount &&
                 playerCount % 2 === 0 &&
                 numRounds === playerCount - 1) {
-                // Use circle method to generate perfect matchings for each round
+
+                // Use circle method to generate perfect matchings for each round,
+                // but assign pairs to courts using the interaction-minimizing routine
+                // so "on-court" interactions (partners+opponents) are balanced across players.
                 const ring = players.slice(); // copy
                 const rounds = [];
+
+                // build currentInteractions map (all zeros initially)
+                const currentInteractions = new Map();
+                players.forEach(p => {
+                    const m = new Map();
+                    players.forEach(q => { if (p !== q) m.set(q, 0); });
+                    currentInteractions.set(p, m);
+                });
+
                 for (let r = 0; r < numRounds; r++) {
                     const pairs = [];
                     for (let i = 0; i < playerCount / 2; i++) {
@@ -650,17 +662,37 @@
                         pairs.push([a, b]);
                     }
 
-                    // Assign pairs to courts: each court uses two pairs (two teams)
-                    const courts = [];
-                    for (let c = 0; c < numCourts; c++) {
-                        const pairIndex = c * 2;
-                        const t1 = pairs[pairIndex];
-                        const t2 = pairs[pairIndex + 1];
-                        courts.push({ number: c + 1, team1: t1, team2: t2 });
-                    }
+                    // Use the interaction-aware court assignment to split pairs into courts.
+                    // createCourtsWithMinimizedInteractions expects an array of "teams" (here each team is a pair)
+                    // and returns courts each with team1/team2.
+                    const courts = createCourtsWithMinimizedInteractions(pairs, currentInteractions);
+
+                    // If the heuristic failed to return courts (very unlikely), fall back to sequential pairing
+                    const usedCourts = courts || (() => {
+                        const fallback = [];
+                        for (let c = 0; c < numCourts; c++) {
+                            const pairIndex = c * 2;
+                            const t1 = pairs[pairIndex];
+                            const t2 = pairs[pairIndex + 1];
+                            fallback.push({ number: c + 1, team1: t1, team2: t2 });
+                        }
+                        return fallback;
+                    })();
 
                     const sittingOut = []; // none, full participation
-                    rounds.push({ round: r + 1, courts, sittingOut });
+                    rounds.push({ round: r + 1, courts: usedCourts, sittingOut });
+
+                    // Update currentInteractions with this round's on-court co-occurrences
+                    usedCourts.forEach(c => {
+                        const courtPlayers = [...c.team1, ...c.team2];
+                        for (let i = 0; i < courtPlayers.length; i++) {
+                            for (let j = i + 1; j < courtPlayers.length; j++) {
+                                const p1 = courtPlayers[i], p2 = courtPlayers[j];
+                                currentInteractions.get(p1).set(p2, (currentInteractions.get(p1).get(p2) || 0) + 1);
+                                currentInteractions.get(p2).set(p1, (currentInteractions.get(p2).get(p1) || 0) + 1);
+                            }
+                        }
+                    });
 
                     // rotate for next round (keep ring[0] fixed)
                     const last = ring.pop();
@@ -965,19 +997,68 @@
             return null;
         }
 
+        // compute variance (or spread) of all unordered pair interaction counts
+        function computePairVariance(interactionsMap, playersList) {
+            const vals = [];
+            for (let i = 0; i < playersList.length; i++) {
+                for (let j = i + 1; j < playersList.length; j++) {
+                    const a = playersList[i], b = playersList[j];
+                    const v = (interactionsMap.get(a).get(b) || 0);
+                    vals.push(v);
+                }
+            }
+            if (vals.length === 0) return 0;
+            const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
+            let variance = 0;
+            vals.forEach(v => variance += (v - mean) * (v - mean));
+            return variance / vals.length;
+        }
+
+        // deep-clone the playerInteractions map-of-maps
+        function cloneInteractionsMap(src) {
+            const dest = new Map();
+            src.forEach((m, p) => {
+                const nm = new Map();
+                m.forEach((v, q) => nm.set(q, v));
+                dest.set(p, nm);
+            });
+            return dest;
+        }
+
         function createCourtsWithMinimizedInteractions(teams, playerInteractions) {
+            // Combine two objectives:
+            // 1) minimize sum of existing interactions on the same court (prefer low-repeat)
+            // 2) minimize variance of the full pairwise interaction distribution after this round
             let bestCourts = null;
             let bestScore = Infinity;
+            const playersList = players.slice();
             for (let attempt = 0; attempt < 200; attempt++) {
                 const shuffled = shuffleArray([...teams]);
                 const courts = [];
-                let score = 0;
+                // base cost: sum of existing pairwise interactions created by combining teams on courts
+                let baseCost = 0;
+                // build projected interactions by cloning current map and incrementing for each on-court pair
+                const projected = cloneInteractionsMap(playerInteractions);
                 for (let i = 0; i < numCourts; i++) {
                     const t1 = shuffled[i * 2];
                     const t2 = shuffled[i * 2 + 1];
-                    t1.forEach(p1 => t2.forEach(p2 => { score += playerInteractions.get(p1).get(p2) || 0; }));
+                    // update baseCost (how much these pairs have already interacted)
+                    const courtPlayers = [...t1, ...t2];
+                    for (let a = 0; a < courtPlayers.length; a++) {
+                        for (let b = a + 1; b < courtPlayers.length; b++) {
+                            const p1 = courtPlayers[a], p2 = courtPlayers[b];
+                            baseCost += (playerInteractions.get(p1).get(p2) || 0);
+                            // increment projected interaction
+                            projected.get(p1).set(p2, (projected.get(p1).get(p2) || 0) + 1);
+                            projected.get(p2).set(p1, (projected.get(p2).get(p1) || 0) + 1);
+                        }
+                    }
                     courts.push({ number: i + 1, team1: t1, team2: t2 });
                 }
+                // compute variance penalty on projected interactions
+                const variance = computePairVariance(projected, playersList);
+                // combine: baseCost is primary, variance penalty weighted moderately
+                const score = baseCost + (variance * 0.8);
                 if (score < bestScore) { bestScore = score; bestCourts = courts; }
             }
             return bestCourts;
@@ -1061,6 +1142,7 @@
         }
 
         function evaluateRound(roundData, teamPartnerships, courtCount) {
+            // Existing penalties for repeated partnerships and team index differences
             let score = 0;
             roundData.courts.forEach(court => {
                 if (teamPartnerships.get(court.team1[0]).has(court.team1[1])) score -= 1000;
@@ -1069,21 +1151,57 @@
                 const team2Diff = Math.abs(players.indexOf(court.team2[0]) - players.indexOf(court.team2[1]));
                 score += (team1Diff + team2Diff) * 2;
             });
-            // Evaluate projected court counts after this round and penalize increased variance
-            const projected = new Map();
-            players.forEach(p => projected.set(p, courtCount.get(p) || 0));
-            roundData.courts.forEach(court => { court.team1.forEach(p => projected.set(p, projected.get(p) + 1)); court.team2.forEach(p => projected.set(p, projected.get(p) + 1)); });
-            // compute simple spread (max - min) and standard deviation-like penalty
-            const counts = [...projected.values()];
+
+            // Balance court-counts as before
+            const projectedCounts = new Map();
+            players.forEach(p => projectedCounts.set(p, courtCount.get(p) || 0));
+            roundData.courts.forEach(court => {
+                court.team1.forEach(p => projectedCounts.set(p, projectedCounts.get(p) + 1));
+                court.team2.forEach(p => projectedCounts.set(p, projectedCounts.get(p) + 1));
+            });
+            const counts = [...projectedCounts.values()];
             const maxTime = Math.max(...counts);
             const minTime = Math.min(...counts);
             const mean = counts.reduce((a, b) => a + b, 0) / counts.length;
             let variance = 0; counts.forEach(c => variance += (c - mean) * (c - mean));
             variance = variance / counts.length;
             const stdev = Math.sqrt(variance);
-            // Penalize spread heavily and stdev moderately
             score -= (maxTime - minTime) * 25;
             score -= stdev * 15;
+
+            // New: evaluate projected pairwise interaction variance (partners + opponents on same court)
+            // Build current interactions map
+            const currentInteractions = new Map();
+            players.forEach(p => {
+                currentInteractions.set(p, new Map());
+                players.forEach(q => { if (p !== q) currentInteractions.get(p).set(q, 0); });
+            });
+            tournament.forEach(r => r.courts.forEach(c => {
+                const courtPlayers = [...c.team1, ...c.team2];
+                for (let i = 0; i < courtPlayers.length; i++) {
+                    for (let j = i + 1; j < courtPlayers.length; j++) {
+                        const a = courtPlayers[i], b = courtPlayers[j];
+                        currentInteractions.get(a).set(b, (currentInteractions.get(a).get(b) || 0) + 1);
+                        currentInteractions.get(b).set(a, (currentInteractions.get(b).get(a) || 0) + 1);
+                    }
+                }
+            }));
+            // project this round's courts into a copy
+            const projectedInteractions = cloneInteractionsMap(currentInteractions);
+            roundData.courts.forEach(c => {
+                const cps = [...c.team1, ...c.team2];
+                for (let i = 0; i < cps.length; i++) {
+                    for (let j = i + 1; j < cps.length; j++) {
+                        const a = cps[i], b = cps[j];
+                        projectedInteractions.get(a).set(b, (projectedInteractions.get(a).get(b) || 0) + 1);
+                        projectedInteractions.get(b).set(a, (projectedInteractions.get(b).get(a) || 0) + 1);
+                    }
+                }
+            });
+            const interactionVariance = computePairVariance(projectedInteractions, players);
+            // Penalize variance moderately (weight chosen empirically)
+            score -= interactionVariance * 0.6;
+
             return score;
         }
 
